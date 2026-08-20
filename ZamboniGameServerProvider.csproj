@@ -13,7 +13,8 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\RelayProtocol\RelayProtocol.csproj" />
+      <ProjectReference Include="..\ZamboniDedicated\ZamboniDedicated.csproj" />
+      <ProjectReference Include="..\ZProtocol\ZProtocol.csproj" />
     </ItemGroup>
 
 </Project>
