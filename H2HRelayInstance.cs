@@ -4,12 +4,7 @@ namespace ZamboniGameServerProvider;
 
 internal sealed class H2HRelayInstance : GameInstance
 {
-    private H2HRelay? _h2HRelay;
-    public ulong GameId { get; }
-    public Guid Guid { get; }
-    public ZamboniTopology Topology { get; }
-    public string GameProtocolVersion { get; }
-    public ushort Port { get; }
+    private H2HRelay? H2HRelay { get; set; }
 
     public H2HRelayInstance(ushort port, ReserveRequest request)
     {
@@ -22,12 +17,12 @@ internal sealed class H2HRelayInstance : GameInstance
 
     public override void Start()
     {
-        _h2HRelay = new H2HRelay(port: Port);
-        _h2HRelay.Start();
+        H2HRelay = new H2HRelay(port: Port);
+        H2HRelay.Start();
     }
 
     public override void Stop()
     {
-        _h2HRelay?.Stop();
+        H2HRelay?.Stop();
     }
 }

@@ -6,20 +6,23 @@ namespace ZamboniGameServerProvider;
 class Program
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
+    private static LogLevel _currentLogLevel = LogLevel.Debug;
+
     private static GameServerProvider? _gameServerProvider;
 
     static async Task Main(string[] args)
     {
         Console.WriteLine("Hello, World!");
-        StartLogger();
+        var startupLevel = ParseLogLevel(args.Length > 0 ? args[0] : null) ?? LogLevel.Debug;
+        StartLogger(startupLevel);
         _gameServerProvider = new GameServerProvider();
         _ = _gameServerProvider.Start();
         await CommandLoop();
     }
 
-    private static void StartLogger()
+    private static void StartLogger(LogLevel startupLevel)
     {
-        var logLevel = LogLevel.Debug;
+        var logLevel = startupLevel;
         var layout = new SimpleLayout("[${longdate}][${callsite-filename:includeSourcePath=false}(${callsite-linenumber})][${level:uppercase=true}]: ${message:withexception=true}");
         LogManager.Setup().LoadConfiguration(builder =>
         {
@@ -29,27 +32,64 @@ class Program
         });
     }
 
-    private static Task CommandLoop()
+    private static LogLevel? ParseLogLevel(string? name)
     {
+        if (string.IsNullOrWhiteSpace(name)) return null;
         try
         {
-            Console.WriteLine("Commands: 'status', 'exit'");
+            return LogLevel.FromString(name.Trim());
+        }
+        catch (Exception)
+        {
+            Console.WriteLine($"Unknown log level '{name}'. Valid options: Trace, Debug, Info, Warn, Error, Fatal, Off");
+            return null;
+        }
+    }
 
-            while (true)
+    private static void SetLogLevel(LogLevel level)
+    {
+        _currentLogLevel = level;
+        if (LogManager.Configuration != null)
+        {
+            foreach (var rule in LogManager.Configuration.LoggingRules)
             {
-                switch (Console.ReadLine()?.Trim().ToLowerInvariant())
-                {
-                    case "status": ShowStatus(); break;
-                    case "exit":
-                        Logger.Info("Exiting...");
-                        Environment.Exit(0);
-                        break;
-                }
+                rule.SetLoggingLevels(level, LogLevel.Fatal);
             }
         }
-        catch (Exception exception)
+
+        LogManager.ReconfigExistingLoggers();
+    }
+
+    private static Task CommandLoop()
+    {
+        Console.WriteLine("Commands: 'status', 'loglevel [level]', 'exit'");
+        while (true)
         {
-            return Task.FromException(exception);
+            var input = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(input)) continue;
+            var parts = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+
+            switch (parts[0].ToLowerInvariant())
+            {
+                case "status": ShowStatus(); break;
+
+                case "loglevel":
+                    if (parts.Length == 1)
+                    {
+                        Console.WriteLine($"Current log level: {_currentLogLevel.Name}");
+                    }
+                    else if (ParseLogLevel(parts[1]) is { } newLevel)
+                    {
+                        SetLogLevel(newLevel);
+                    }
+
+                    break;
+
+                case "exit":
+                    Logger.Info("Exiting...");
+                    Environment.Exit(0);
+                    break;
+            }
         }
     }
 

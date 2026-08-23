@@ -5,13 +5,8 @@ namespace ZamboniGameServerProvider;
 
 internal sealed class DedicatedInstance : GameInstance
 {
-    private Dedicated? _dedicated;
-    public ulong GameId { get; }
-    public Guid Guid { get; }
-    public ZamboniTopology Topology { get; }
-    public string GameProtocolVersion { get; }
-    public ushort Port { get; }
-    public int MaxPlayers { get; }
+    private Dedicated? Dedicated { get; set; }
+    private int MaxPlayers { get; }
 
     public DedicatedInstance(ushort port, ReserveRequest request)
     {
@@ -25,12 +20,12 @@ internal sealed class DedicatedInstance : GameInstance
 
     public override void Start()
     {
-        _dedicated = new Dedicated(ticksPerSecond: 30, maxClients: MaxPlayers, port: Port);
-        _dedicated.Run();
+        Dedicated = new Dedicated(ticksPerSecond: 30, maxClients: MaxPlayers, port: Port);
+        Dedicated.Start();
     }
 
     public override void Stop()
     {
-        _dedicated?.Shutdown();
+        Dedicated?.Stop();
     }
 }
