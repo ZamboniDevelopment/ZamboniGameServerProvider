@@ -141,7 +141,7 @@ public class GameServerProvider
 
                                 break;
                             case ResetAllInstancesCommand resetAllInstancesCommand:
-                                var versions = resetAllInstancesCommand.GameProtocolVersions.ToList();
+                                var versions = resetAllInstancesCommand.GameProtocolVersions;
                                 foreach (var server in Servers.Values.ToList().Where(server => versions.Contains(server.GameProtocolVersion)))
                                 {
                                     if (Servers.TryRemove(server.Guid, out var removed))
