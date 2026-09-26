@@ -5,8 +5,8 @@ namespace ZamboniGameServerProvider;
 
 public sealed class H2HRelay(ushort port)
 {
-    private IPEndPoint? _playerA;
-    private IPEndPoint? _playerB;
+    public IPEndPoint? PlayerA;
+    public IPEndPoint? PlayerB;
     private readonly UdpClient _relayUdpClient = new(port);
     private readonly CancellationTokenSource _cts = new();
 
@@ -49,16 +49,16 @@ public sealed class H2HRelay(ushort port)
     {
         var sender = result.RemoteEndPoint;
 
-        if (_playerA is null)
+        if (PlayerA is null)
         {
-            _playerA = sender;
+            PlayerA = sender;
         }
-        else if (_playerB is null && !sender.Equals(_playerA))
+        else if (PlayerB is null && !sender.Equals(PlayerA))
         {
-            _playerB = sender;
+            PlayerB = sender;
         }
 
-        var target = sender.Equals(_playerA) ? _playerB : sender.Equals(_playerB) ? _playerA : null;
+        var target = sender.Equals(PlayerA) ? PlayerB : sender.Equals(PlayerB) ? PlayerA : null;
 
         if (target is not null) await _relayUdpClient.SendAsync(result.Buffer, target);
     }

@@ -14,7 +14,7 @@ public class GameServerProvider
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     public static readonly string PublicIp = new HttpClient().GetStringAsync("https://checkip.amazonaws.com/").GetAwaiter().GetResult().Trim();
 
-    private static GameServerProviderConfig _config = null!;
+    public static GameServerProviderConfig Config = null!;
 
     public readonly ConcurrentDictionary<Guid, GameInstance> Servers = new();
     private readonly ConcurrentQueue<ushort> _freePorts = new();
@@ -22,7 +22,7 @@ public class GameServerProvider
     public GameServerProvider()
     {
         InitConfig();
-        for (ushort p = _config.PortRangeStart; p < _config.PortRangeEnd; p++)
+        for (ushort p = Config.PortRangeStart; p < Config.PortRangeEnd; p++)
         {
             _freePorts.Enqueue(p);
         }
@@ -30,7 +30,7 @@ public class GameServerProvider
 
     public Task Start()
     {
-        _ = Listener();
+        _ = Listen();
         return Task.CompletedTask;
     }
 
@@ -41,19 +41,19 @@ public class GameServerProvider
 
         if (!File.Exists(configFile))
         {
-            _config = new GameServerProviderConfig();
-            File.WriteAllText(configFile, serializer.Serialize(_config));
+            Config = new GameServerProviderConfig();
+            File.WriteAllText(configFile, serializer.Serialize(Config));
             Logger.Warn("Config file created: " + configFile);
             return;
         }
 
         var deserializer = new DeserializerBuilder().WithNamingConvention(PascalCaseNamingConvention.Instance).Build();
-        _config = deserializer.Deserialize<GameServerProviderConfig>(File.ReadAllText(configFile));
+        Config = deserializer.Deserialize<GameServerProviderConfig>(File.ReadAllText(configFile));
     }
 
-    private async Task Listener()
+    private async Task Listen()
     {
-        var listener = new TcpListener(IPAddress.Any, _config.ZProtocolPort);
+        var listener = new TcpListener(IPAddress.Any, Config.ZProtocolPort);
         listener.Start();
 
         while (true)
@@ -66,107 +66,152 @@ public class GameServerProvider
                 {
                     var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
 
-                    if (!_config.MatchmakingServerAddresses.Contains(remoteIp))
+                    if (Config.MatchmakingServerAddresses.Any(ipAddress => ipAddress.Equals(remoteIp)))
                     {
-                        Logger.Warn("Blocked packet from: " + remoteIp);
-                        return;
-                    }
-
-                    try
-                    {
-                        await using var stream = client.GetStream();
-
-                        var command = await Protocol.ReadCommandAsync(stream);
-
-                        if (command == null)
+                        try
                         {
-                            Logger.Warn("Packet is null");
-                            return;
-                        }
+                            await using var stream = client.GetStream();
 
-                        if (command.Version != Protocol.ProtocolVersion)
-                        {
-                            Logger.Warn($"Version mismatch: {command.Version}");
-                            return;
-                        }
+                            var command = await Protocol.ReadCommandAsync(stream);
 
-                        switch (command)
-                        {
-                            case ReserveInstanceCommand reserve:
+                            if (command == null)
+                            {
+                                Logger.Warn("Packet is null");
+                                return;
+                            }
 
-                                if (!_freePorts.TryDequeue(out var port))
-                                {
-                                    await Protocol.SendResponseAsync(stream, new GenericResponse
+                            if (command.Version != Protocol.ProtocolVersion)
+                            {
+                                Logger.Warn($"Version mismatch: {command.Version}");
+                                return;
+                            }
+
+                            switch (command)
+                            {
+                                case ReserveInstanceCommand reserve:
+
+                                    if (!_freePorts.TryDequeue(out var port))
                                     {
-                                        Status = Status.NoCapacity
+                                        await Protocol.SendResponseAsync(stream, new GenericResponse
+                                        {
+                                            Status = Status.NoCapacity
+                                        });
+                                        break;
+                                    }
+
+                                    GameInstance gameInstance;
+                                    if (reserve.Request.Topology == ZamboniTopology.Dedicated)
+                                    {
+                                        Logger.Debug($"GameServerProvider creating a dedicated server on port {port}");
+                                        gameInstance = new DedicatedInstance(port, reserve.Request, remoteIp.ToString());
+                                    }
+                                    else
+                                    {
+                                        Logger.Debug($"GameServerProvider creating a relay server on port {port}");
+                                        gameInstance = new H2HRelayInstance(port, reserve.Request, remoteIp.ToString());
+                                    }
+
+                                    Servers.TryAdd(reserve.Request.Guid, gameInstance);
+                                    gameInstance.Start();
+                                    await Protocol.SendResponseAsync(stream, new ReserveInstanceResponse(new GameInstanceInfo(Config.PublicIp.ToLower().Equals("auto") ? PublicIp : Config.PublicIp, port))
+                                    {
+                                        Status = Status.Ok
                                     });
                                     break;
-                                }
+                                case DestroyInstanceCommand destroy:
+                                    if (Servers.TryRemove(destroy.Guid, out var destroyed))
+                                    {
+                                        destroyed.Stop();
+                                        _freePorts.Enqueue(destroyed.Port);
+                                        Logger.Debug($"Destroyed server on port {destroyed.Port}");
+                                        await Protocol.SendResponseAsync(stream, new GenericResponse
+                                        {
+                                            Status = Status.Ok
+                                        });
+                                    }
+                                    else
+                                    {
+                                        await Protocol.SendResponseAsync(stream, new GenericResponse
+                                        {
+                                            Status = Status.Error
+                                        });
+                                    }
 
-                                GameInstance gameInstance;
-                                if (reserve.Request.Topology == ZamboniTopology.Dedicated)
-                                {
-                                    gameInstance = new DedicatedInstance(port, reserve.Request);
-                                }
-                                else
-                                {
-                                    gameInstance = new H2HRelayInstance(port, reserve.Request);
-                                }
+                                    break;
+                                case ResetAllInstancesCommand resetAllInstancesCommand:
+                                    var versions = resetAllInstancesCommand.GameProtocolVersions;
+                                    foreach (var server in Servers.Values.ToList().Where(server => versions.Contains(server.GameProtocolVersion)))
+                                    {
+                                        if (Servers.TryRemove(server.Guid, out var removed))
+                                        {
+                                            removed.Stop();
+                                            _freePorts.Enqueue(server.Port);
+                                        }
+                                    }
 
-                                Servers.TryAdd(reserve.Request.Guid, gameInstance);
-                                gameInstance.Start();
-                                await Protocol.SendResponseAsync(stream, new ReserveInstanceResponse(new GameInstanceInfo(_config.PublicIp.ToLower().Equals("auto") ? PublicIp : _config.PublicIp, port))
-                                {
-                                    Status = Status.Ok
-                                });
-                                break;
-                            case DestroyInstanceCommand destroy:
-                                if (Servers.TryRemove(destroy.Guid, out var destroyed))
-                                {
-                                    destroyed.Stop();
-                                    _freePorts.Enqueue(destroyed.Port);
-                                    Logger.Debug($"Destroyed server on port {destroyed.Port}");
                                     await Protocol.SendResponseAsync(stream, new GenericResponse
                                     {
                                         Status = Status.Ok
                                     });
-                                }
-                                else
-                                {
-                                    await Protocol.SendResponseAsync(stream, new GenericResponse
+                                    break;
+                                case PlayerJoiningCommand playerJoining:
+                                    bool success = false;
+                                    if (Servers.TryGetValue(playerJoining.Guid, out var targetServer))
                                     {
-                                        Status = Status.Error
-                                    });
-                                }
-
-                                break;
-                            case ResetAllInstancesCommand resetAllInstancesCommand:
-                                var versions = resetAllInstancesCommand.GameProtocolVersions;
-                                foreach (var server in Servers.Values.ToList().Where(server => versions.Contains(server.GameProtocolVersion)))
-                                {
-                                    if (Servers.TryRemove(server.Guid, out var removed))
-                                    {
-                                        removed.Stop();
-                                        _freePorts.Enqueue(server.Port);
+                                        success = targetServer.AddJoiningPlayer(playerJoining.Slot, playerJoining.IpAddress);
                                     }
-                                }
 
-                                await Protocol.SendResponseAsync(stream, new GenericResponse
-                                {
-                                    Status = Status.Ok
-                                });
-                                break;
-                            default:
-                                Logger.Warn($"Unknown command type: {command.GetType().Name}");
-                                break;
+                                    if (success)
+                                    {
+                                        await Protocol.SendResponseAsync(stream, new GenericResponse
+                                        {
+                                            Status = Status.Ok
+                                        });
+                                    }
+                                    else
+                                    {
+                                        await Protocol.SendResponseAsync(stream, new GenericResponse
+                                        {
+                                            Status = Status.Error
+                                        });
+                                    }
+
+                                    break;
+                                default:
+                                    Logger.Warn($"Unknown command type: {command.GetType().Name}");
+                                    break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Error(ex, "Error processing request");
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Logger.Error(ex, "Error processing request");
+                        Logger.Warn("Blocked packet from: " + remoteIp);
                     }
                 }
             });
         }
+    }
+
+    public static async Task<ResponsePacket?> SendAsync(string ip, ushort port, CommandPacket command)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(ip, port);
+            await using var stream = client.GetStream();
+            await Protocol.SendCommandAsync(stream, command);
+            return await Protocol.ReadResponseAsync(stream);
+        }
+        catch (Exception e)
+        {
+            Logger.Warn(e);
+            Logger.Warn("Failed to contact server " + ip);
+        }
+
+        return null;
     }
 }

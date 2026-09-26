@@ -8,15 +8,15 @@ class Program
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private static LogLevel _currentLogLevel = LogLevel.Debug;
 
-    private static GameServerProvider? _gameServerProvider;
+    public static GameServerProvider? GameServerProvider;
 
     static async Task Main(string[] args)
     {
         Console.WriteLine("Hello, World!");
         var startupLevel = ParseLogLevel(args.Length > 0 ? args[0] : null) ?? LogLevel.Debug;
         StartLogger(startupLevel);
-        _gameServerProvider = new GameServerProvider();
-        _ = _gameServerProvider.Start();
+        GameServerProvider = new GameServerProvider();
+        _ = GameServerProvider.Start();
         await CommandLoop();
     }
 
@@ -96,8 +96,8 @@ class Program
     private static void ShowStatus()
     {
         Console.WriteLine("\n--- ZamboniGameServerProvider ---");
-        Console.WriteLine($"Active instances: {_gameServerProvider!.Servers.Count}");
-        foreach (var server in _gameServerProvider.Servers.Values)
+        Console.WriteLine($"Active instances: {GameServerProvider!.Servers.Count}");
+        foreach (var server in GameServerProvider.Servers.Values)
         {
             Console.WriteLine($"{server.Guid} {server.GameId} {server.GameProtocolVersion} {server.Topology} {server.Port}");
         }
